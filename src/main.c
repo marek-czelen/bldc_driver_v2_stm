@@ -35,6 +35,7 @@ safety_error_t    g_safety_error = SAFETY_OK;
 float             g_bus_voltage  = 0.0f;
 float             g_throttle     = 0.0f;
 bool              g_cli_control_active = false;
+bool              g_watch_active = false;
 
 /* ══════════════════════════════════════════════════════════
  * SysTick — 1 kHz
@@ -225,6 +226,11 @@ int main(void)
 
         /* ── Obsługa CLI (UART) ─────────────────────────── */
         cli_process();
+
+        /* ── Podgląd watch (nieblokujący) ────────────────── */
+        if (g_watch_active) {
+            cli_watch_poll();
+        }
 
         /* ── Uśpienie między cyklami ────────────────────── */
         __WFI();

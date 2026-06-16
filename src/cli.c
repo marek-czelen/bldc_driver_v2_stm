@@ -24,11 +24,17 @@
 #define UART_BAUD           115200
 #define CLI_LINE_BUF_SIZE   64
 #define CLI_MAX_ARGS        4
+#define TX_BUF_SIZE         512     /* bufor nadawczy (ring buffer) */
 
 /* ── Bufor odbioru ───────────────────────────────────────── */
 static char     rx_line_buf_[CLI_LINE_BUF_SIZE];
 static uint8_t  rx_idx_      = 0;
 static bool     rx_complete_ = false;
+
+/* ── Bufor nadawczy (ring buffer, przerwaniowy TX) ───────── */
+static char             tx_buf_[TX_BUF_SIZE];
+static volatile uint16_t tx_head_ = 0;  /* czyta ISR */
+static volatile uint16_t tx_tail_ = 0;  /* zapisuje main */
 
 /* ── Forward declarations ────────────────────────────────── */
 static void cmd_help(int argc, char *argv[]);
@@ -40,6 +46,7 @@ static void cmd_mode(int argc, char *argv[]);
 static void cmd_status(int argc, char *argv[]);
 static void cmd_fault(int argc, char *argv[]);
 static void cmd_vbat(int argc, char *argv[]);
+static void cmd_watch(int argc, char *argv[]);
 
 /* ── Tablica komend ──────────────────────────────────────── */
 typedef struct {
@@ -59,6 +66,7 @@ static const cli_cmd_t cmd_table_[] = {
     { "status", "status                       - stan systemu",           cmd_status },
     { "fault",  "fault                        - stan bledow / reset",    cmd_fault  },
     { "vbat",   "vbat                         - odczyt napiecia baterii",cmd_vbat   },
+    { "watch",  "watch                        - podglad parametrow na zywo",cmd_watch  },
 };
 
 #define CMD_COUNT (sizeof(cmd_table_) / sizeof(cmd_table_[0]))
@@ -114,29 +122,38 @@ void cli_init(void)
 }
 
 /* ─────────────────────────────────────────────────────────
- * USART2_IRQHandler — odbiór znaku
+ * USART2_IRQHandler — odbiór znaku (RX) + nadawanie (TX)
  * ──────────────────────────────────────────────────────── */
 void USART2_IRQHandler(void)
 {
+    /* ── TX: wyślij kolejny znak z bufora pierścieniowego ─ */
+    if ((USART2->SR & USART_SR_TXE) && (USART2->CR1 & USART_CR1_TXEIE)) {
+        if (tx_head_ != tx_tail_) {
+            USART2->DR = tx_buf_[tx_head_];
+            tx_head_ = (tx_head_ + 1) % TX_BUF_SIZE;
+        } else {
+            /* Bufor pusty — wyłącz przerwanie TXE */
+            USART2->CR1 &= ~USART_CR1_TXEIE;
+        }
+    }
+
+    /* ── RX: odbiór znaku (echo przez bezpośredni TX) ─── */
     if (USART2->SR & USART_SR_RXNE) {
         char c = (char)(USART2->DR & 0xFF);
 
         if (c == '\r' || c == '\n') {
-            /* Koniec linii */
             if (rx_idx_ > 0) {
                 rx_line_buf_[rx_idx_] = '\0';
                 rx_complete_ = true;
             }
-            /* Echo nowej linii */
+            /* Echo nowej linii — bezpośrednio, ISR nie może użyć ring buffera */
             while (!(USART2->SR & USART_SR_TXE)) { __NOP(); }
             USART2->DR = '\r';
             while (!(USART2->SR & USART_SR_TXE)) { __NOP(); }
             USART2->DR = '\n';
         } else if (c == '\b' || c == 0x7F) {
-            /* Backspace */
             if (rx_idx_ > 0) {
                 rx_idx_--;
-                /* Echo backspace */
                 while (!(USART2->SR & USART_SR_TXE)) { __NOP(); }
                 USART2->DR = '\b';
                 while (!(USART2->SR & USART_SR_TXE)) { __NOP(); }
@@ -145,27 +162,36 @@ void USART2_IRQHandler(void)
                 USART2->DR = '\b';
             }
         } else if (c >= ' ' && c <= '~') {
-            /* Drukwalny znak */
             if (rx_idx_ < CLI_LINE_BUF_SIZE - 1) {
                 rx_line_buf_[rx_idx_++] = c;
-                /* Echo */
                 while (!(USART2->SR & USART_SR_TXE)) { __NOP(); }
                 USART2->DR = c;
             }
         }
-        /* Inne znaki sterujące — ignoruj */
     }
 }
 
 /* ─────────────────────────────────────────────────────────
- * cli_putc — wysłanie pojedynczego znaku (blokujące)
+ * cli_putc — wysłanie znaku przez bufor pierścieniowy
+ *            (nieblokujące — znak kolejkowany, ISR wysyła)
  * ──────────────────────────────────────────────────────── */
 void cli_putc(char c)
 {
-    while (!(USART2->SR & USART_SR_TXE)) {
+    uint16_t next = (tx_tail_ + 1) % TX_BUF_SIZE;
+
+    /* Czekaj aż będzie miejsce w buforze (zapobiega overflow) */
+    while (next == tx_head_) {
+        /* Bufor pełny — krótkie aktywne czekanie.
+         * W normalnych warunkach ISR opróżnia bufor szybciej niż
+         * go zapełniamy, więc to się nie zacina. */
         __NOP();
     }
-    USART2->DR = c;
+
+    tx_buf_[tx_tail_] = c;
+    tx_tail_ = next;
+
+    /* Włącz przerwanie TXE (jeśli jeszcze nieaktywne) */
+    USART2->CR1 |= USART_CR1_TXEIE;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -209,7 +235,12 @@ void cli_process(void)
     }
 
     if (argc == 0) {
-        /* Pusta linia */
+        /* Pusta linia — jeśli watch aktywny, wyłącz go */
+        if (g_watch_active) {
+            g_watch_active = false;
+            cli_puts("\r\n");
+            cli_println("Watch wylaczony.");
+        }
         cli_puts("bldc> ");
         return;
     }
@@ -405,6 +436,64 @@ static void cmd_vbat(int argc, char *argv[])
     g_bus_voltage = vbat;
 }
 
+static void cmd_watch(int argc, char *argv[])
+{
+    (void)argc; (void)argv;
+
+    if (g_watch_active) {
+        /* Wyłącz watch */
+        g_watch_active = false;
+        cli_puts("\r\n");
+        cli_println("Watch wylaczony.");
+        return;
+    }
+
+    cli_println("Podglad na zywo (ENTER = wyjscie)...");
+    g_watch_active = true;
+}
+
+/* ─────────────────────────────────────────────────────────
+ * cli_watch_poll — wypisuje linię watch co 100 ms
+ * Wywoływana z pętli głównej gdy g_watch_active == true
+ * ──────────────────────────────────────────────────────── */
+void cli_watch_poll(void)
+{
+    static uint32_t last_tick = 0;
+    uint32_t now = sys_tick_ms;
+
+    if ((now - last_tick) < 100) return;
+    last_tick = now;
+
+    char buf[128];
+
+    float vbat  = g_bus_voltage;
+    float ia    = adc_get_current_a();
+    float ib    = adc_get_current_b();
+    float ic    = adc_get_current_c();
+    float temp  = adc_get_temperature();
+    float duty  = block_get_duty();
+    uint8_t hall = gpio_get_hall_state();
+    uint8_t step = block_get_step();
+
+    const char *m = (g_control_mode == CTRL_MODE_BLOCK) ? "BLK" :
+                    (g_control_mode == CTRL_MODE_SINUS) ? "SIN" : "FOC";
+    const char *s = (g_driver_state == STATE_RUN)   ? "RUN" :
+                    (g_driver_state == STATE_FAULT) ? "FLT" : "IDL";
+
+    snprintf(buf, sizeof(buf),
+             "\rM:%-3s S:%-3s D:%4.1f%% K:%d H:%c%c%c V:%5.1fV Ia:%5.2f Ib:%5.2f Ic:%5.2f T:%4.1fC  ",
+             m, s,
+             (double)(duty * 100.0f),
+             step,
+             (hall & 1) ? '1' : '0',
+             (hall & 2) ? '1' : '0',
+             (hall & 4) ? '1' : '0',
+             (double)vbat,
+             (double)ia, (double)ib, (double)ic,
+             (double)temp);
+    cli_puts(buf);
+}
+
 /* ─────────────────────────────────────────────────────────
  * cli_print_status — wypisanie pełnego statusu
  * ──────────────────────────────────────────────────────── */
@@ -471,11 +560,14 @@ void cli_print_status(void)
     cli_println(buf);
 
     /* Prądy */
-    float ia = adc_get_current(PHASE_A);
-    float ib = adc_get_current(PHASE_B);
+    float ia = adc_get_current_a();
+    float ib = adc_get_current_b();
+    float ic = adc_get_current_c();
     snprintf(buf, sizeof(buf), "  I(A):       %.2f A", (double)ia);
     cli_println(buf);
     snprintf(buf, sizeof(buf), "  I(B):       %.2f A", (double)ib);
+    cli_println(buf);
+    snprintf(buf, sizeof(buf), "  I(C):       %.2f A  (obl.)", (double)ic);
     cli_println(buf);
 
     /* Temperatura */

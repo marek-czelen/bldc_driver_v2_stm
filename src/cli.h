@@ -27,4 +27,7 @@ void cli_println(const char *s);
 // Wypisanie statusu systemu
 void cli_print_status(void);
 
+// Nieblokujący podgląd watch — wywołuj w pętli głównej
+void cli_watch_poll(void);
+
 #endif // CLI_H

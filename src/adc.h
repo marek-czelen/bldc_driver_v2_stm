@@ -18,8 +18,11 @@ void adc_start_conversion(void);
 // Odczyt wyników (wartości surowe 12-bit)
 uint16_t adc_get_raw(uint8_t channel);
 
-// Odczyt prądu fazy w amperach
+// Odczyt prądu fazy w amperach (tylko A i B — mierzone; C wyliczane)
 float adc_get_current(phase_t phase);
+float adc_get_current_a(void);
+float adc_get_current_b(void);
+float adc_get_current_c(void);   // Ic = -(Ia + Ib) — z prawa Kirchhoffa
 
 // Odczyt napięcia baterii
 float adc_get_bus_voltage(void);

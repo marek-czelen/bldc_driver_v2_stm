@@ -53,5 +53,6 @@ extern safety_error_t    g_safety_error;
 extern float             g_bus_voltage;
 extern float             g_throttle;       // 0.0 .. 1.0
 extern bool              g_cli_control_active; // true: sterowanie z CLI (start/duty)
+extern bool              g_watch_active;       // true: podgląd watch na żywo
 
 #endif // MAIN_H

@@ -129,7 +129,7 @@ uint16_t adc_get_raw(uint8_t channel)
 }
 
 /* ─────────────────────────────────────────────────────────
- * adc_get_current — prąd fazy w amperach
+ * adc_get_current — prąd fazy w amperach (A lub B)
  * I = (Vout - Vref/2) / (GAIN * Rshunt)
  * Vout = raw * VREF / 4096
  * ──────────────────────────────────────────────────────── */
@@ -142,6 +142,20 @@ float adc_get_current(phase_t phase)
     float vref_half = ADC_VREF * 0.5f;           /* INA240 offset = Vref/2 */
     float current = (vout - vref_half) / (INA240_GAIN * SHUNT_RESISTANCE);
     return current;
+}
+
+float adc_get_current_a(void) { return adc_get_current(PHASE_A); }
+float adc_get_current_b(void) { return adc_get_current(PHASE_B); }
+
+/* ─────────────────────────────────────────────────────────
+ * adc_get_current_c — prąd fazy C wyliczony z Kirchhoffa
+ * Ia + Ib + Ic = 0  →  Ic = -(Ia + Ib)
+ * ──────────────────────────────────────────────────────── */
+float adc_get_current_c(void)
+{
+    float ia = adc_get_current_a();
+    float ib = adc_get_current_b();
+    return -(ia + ib);
 }
 
 /* ─────────────────────────────────────────────────────────

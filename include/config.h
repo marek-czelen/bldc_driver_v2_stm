@@ -81,7 +81,7 @@
 #define LED_BLINK_MS            500
 
 // ── Limity testowe (zmień po zweryfikowaniu działania) ────
-#define PWM_MAX_DUTY            0.20f           // maks. 20% na pierwszy test
-// #define PWM_MAX_DUTY         1.00f           // odkomentuj po testach
+ #define PWM_MAX_DUTY         0.20f           // maks. 20% na pierwszy test
+//#define PWM_MAX_DUTY            1.00f           // pełny zakres
 
 #endif // CONFIG_H
