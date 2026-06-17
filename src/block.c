@@ -13,7 +13,7 @@
  *    1 0 0   │  4   │ C+ A-
  *    1 0 1   │  5   │ C+ B-
  *
- * High-side: PWM (TIM1_CHx), Low-side: GPIO ON/OFF
+ * High-side: PWM (TIM1_CHx), Low-side: PWM komplementarne (TIM1_CHxN)
  */
 
 #include <stm32f4xx.h>

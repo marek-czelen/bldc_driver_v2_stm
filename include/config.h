@@ -21,16 +21,16 @@
 #define PWM_DTG_VAL             48
 
 // ── Piny PWM (faza A / B / C) ─────────────────────────────
-// High-side: PA8, PA9, PA10 — TIM1_CH1, CH2, CH3
-// Low-side:  PB13, PB14, PB15 — GPIO (przełączane programowo)
+// High-side: PA8, PA9, PA10 — TIM1_CH1, CH2, CH3 (PWM)
+// Low-side:  PB13, PB14, PB15 — TIM1_CH1N, CH2N, CH3N (komplementarne, sprzętowe)
 #define PWM_PORT_HIGH           GPIOA
-#define PWM_PORT_LOW            GPIOB
+#define PWM_PORT_LOW            GPIOB           /* już nieużywane — LS przez TIM1_CHxN */
 #define PWM_PIN_AH              8       // PA8
 #define PWM_PIN_BH              9       // PA9
 #define PWM_PIN_CH              10      // PA10
-#define PWM_PIN_AL              13      // PB13
-#define PWM_PIN_BL              14      // PB14
-#define PWM_PIN_CL              15      // PB15
+#define PWM_PIN_AL              13      // PB13 = TIM1_CH1N
+#define PWM_PIN_BL              14      // PB14 = TIM1_CH2N
+#define PWM_PIN_CL              15      // PB15 = TIM1_CH3N
 
 // ── ADC ────────────────────────────────────────────────────
 #define ADC_CH_CURRENT_A        0       // PA0 — INA240 #1

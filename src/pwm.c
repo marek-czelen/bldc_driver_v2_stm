@@ -1,9 +1,13 @@
 /**
  * pwm.c — Obsługa PWM (TIM1) dla 3-fazowego mostka BLDC
  *
- * High-side: PA8 (TIM1_CH1), PA9 (TIM1_CH2), PA10 (TIM1_CH3) — PWM
- * Low-side:  PB13, PB14, PB15 — GPIO (załączanie programowe)
+ * High-side: PA8  (TIM1_CH1),  PA9  (TIM1_CH2),  PA10 (TIM1_CH3)  — PWM
+ * Low-side:  PB13 (TIM1_CH1N), PB14 (TIM1_CH2N), PB15 (TIM1_CH3N) — PWM komplementarne
  * BKIN:      PB12 — sprzętowy BREAK (overcurrent, aktywny stan niski)
+ *
+ * Low-side realizowany sprzętowo przez wyjścia komplementarne TIM1:
+ *   - LS ON  → CCxNE=1, CCRx=0, CCxNP=0 → OCxN = NOT(CNT<0) = zawsze HIGH
+ *   - LS OFF → CCxNE=0, OISxN=0 → idle state = LOW
  *
  * Konfiguracja: 20 kHz, edge-aligned, active-high,
  *               dead-time 500 ns na wyjściach komplementarnych
@@ -45,18 +49,27 @@ void pwm_init(void)
                    & ~(0xFUL << 8);   /* PA10 → AF1 */
     GPIOA->AFR[1] |=  (1UL << 0) | (1UL << 4) | (1UL << 8);
 
-    /* ── GPIOB: PB13/14/15 → output push-pull (low-side) ─ */
+    /* ── GPIOB: PB13/14/15 → AF1 (TIM1_CH1N/CH2N/CH3N) ── */
+    /* Wyjścia komplementarne TIM1 dla low-side FETów.
+     * AF1 = TIM1, push-pull, very high speed, początkowo LOW (safely). */
     GPIOB->MODER   &= ~(GPIO_MODER_MODER13_Msk
                       | GPIO_MODER_MODER14_Msk
                       | GPIO_MODER_MODER15_Msk);
-    GPIOB->MODER   |=  (1UL << GPIO_MODER_MODER13_Pos)  /* output */
-                     | (1UL << GPIO_MODER_MODER14_Pos)
-                     | (1UL << GPIO_MODER_MODER15_Pos);
-    GPIOB->OSPEEDR |=  (3UL << GPIO_OSPEEDR_OSPEED13_Pos)
+    GPIOB->MODER   |=  (2UL << GPIO_MODER_MODER13_Pos)  /* AF */
+                     | (2UL << GPIO_MODER_MODER14_Pos)
+                     | (2UL << GPIO_MODER_MODER15_Pos);
+    GPIOB->OSPEEDR |=  (3UL << GPIO_OSPEEDR_OSPEED13_Pos) /* very high */
                      | (3UL << GPIO_OSPEEDR_OSPEED14_Pos)
                      | (3UL << GPIO_OSPEEDR_OSPEED15_Pos);
-    /* Wstępnie LOW → LS wyłączone */
-    GPIOB->BSRR  = (1UL << (13+16)) | (1UL << (14+16)) | (1UL << (15+16));
+    GPIOB->OTYPER  &= ~((1UL << 13) | (1UL << 14) | (1UL << 15)); /* push-pull */
+    GPIOB->PUPDR   &= ~(GPIO_PUPDR_PUPD13_Msk      /* no pull */
+                      | GPIO_PUPDR_PUPD14_Msk
+                      | GPIO_PUPDR_PUPD15_Msk);
+    /* AF1 → TIM1 */
+    GPIOB->AFR[1] &= ~(0xFUL << 20)   /* PB13 */
+                   & ~(0xFUL << 24)   /* PB14 */
+                   & ~(0xFUL << 28);  /* PB15 */
+    GPIOB->AFR[1] |=  (1UL << 20) | (1UL << 24) | (1UL << 28);
 
     /* ── GPIOB: PB12 → AF1 (TIM1_BKIN), pull-up ─────────── */
     GPIOB->MODER   &= ~GPIO_MODER_MODER12_Msk;
@@ -83,10 +96,10 @@ void pwm_init(void)
     TIM1->CCMR2  = (6UL << TIM_CCMR2_OC3M_Pos)
                  | TIM_CCMR2_OC3PE;
 
-    /* ── TIM1_CCER: wszystkie wyjścia początkowo WYŁĄCZONE ─ */
-    /* Polarity: active-high, OCxN disabled.
-       Kanały HS będą włączane przez block_commutate() per krok. */
-    TIM1->CCER   = 0;                   /* CC1E/CC2E/CC3E = 0 */
+    /* ── TIM1_CCER: wyjścia początkowo WYŁĄCZONE ────────── */
+    /* Polarity: HS active-high (CCxP=0), LS complementary active-high (CCxNP=0).
+       Kanały HS i LS będą włączane przez block_commutate() per krok. */
+    TIM1->CCER   = 0;                   /* CC1E/CC2E/CC3E = 0, CC1NE/CC2NE/CC3NE = 0 */
 
     /* ── TIM1_BDTR: dead-time + BREAK (BKIN active-low) ─ */
     /* BKP=0 => break aktywny stanem niskim na BKIN */
@@ -94,8 +107,8 @@ void pwm_init(void)
                  | TIM_BDTR_BKE         /* BREAK input enable */
                  | TIM_BDTR_MOE;        /* main output enable */
 
-    /* ── TIM1_CR2: OISx = 0 (off-state = low) ────────── */
-    TIM1->CR2    = 0;
+    /* ── TIM1_CR2: OISx=0, OISxN=0 (off-state = LOW, bezpieczny) ─ */
+    TIM1->CR2    = 0;   /* OIS1=OIS2=OIS3=0, OIS1N=OIS2N=OIS3N=0 */
 
     /* ── Wstępnie CCR = 0 → wszystkie HS OFF ─────────── */
     TIM1->CCR1   = 0;
@@ -137,44 +150,84 @@ void pwm_set_duty(phase_t phase, float duty)
 
 /* ─────────────────────────────────────────────────────────
  * pwm_hs_enable — włączenie/wyłączenie high-side PWM
+ * Przy włączaniu HS czyści również CCxNE (zapobiega shoot-through).
  * ──────────────────────────────────────────────────────── */
 void pwm_hs_enable(phase_t phase, bool enable)
 {
     if (phase >= PHASE_COUNT) return;
     hs_enabled_[phase] = enable;
 
-    uint32_t mask = 0;
+    uint32_t cce_mask  = 0;
+    uint32_t ccne_mask = 0;
+
     switch (phase) {
-    case PHASE_A: mask = TIM_CCER_CC1E; break;
-    case PHASE_B: mask = TIM_CCER_CC2E; break;
-    case PHASE_C: mask = TIM_CCER_CC3E; break;
+    case PHASE_A:
+        cce_mask  = TIM_CCER_CC1E;
+        ccne_mask = TIM_CCER_CC1NE;
+        break;
+    case PHASE_B:
+        cce_mask  = TIM_CCER_CC2E;
+        ccne_mask = TIM_CCER_CC2NE;
+        break;
+    case PHASE_C:
+        cce_mask  = TIM_CCER_CC3E;
+        ccne_mask = TIM_CCER_CC3NE;
+        break;
     default: return;
     }
 
     if (enable) {
-        TIM1->CCER |= mask;
+        /* Wyłącz LS komplementarny przed włączeniem HS (bezpieczeństwo) */
+        TIM1->CCER &= ~ccne_mask;
+        TIM1->CCER |= cce_mask;
     } else {
-        TIM1->CCER &= ~mask;
+        TIM1->CCER &= ~cce_mask;
     }
 }
 
 /* ─────────────────────────────────────────────────────────
- * pwm_ls_enable — włączenie/wyłączenie low-side (GPIO)
+ * pwm_ls_enable — włączenie/wyłączenie low-side (TIM1_CHxN)
+ *
+ * LS ON:  CCxE=1, CCxNE=1, CCRx=0, CCxP=0, CCxNP=0
+ *         → OCx  = LOW (HS FET bezpiecznie wyłączony)
+ *         → OCxN = HIGH (LS FET włączony na 100%)
+ *         Oba wyjścia aktywne — gwarantuje poprawne działanie
+ *         wyjścia komplementarnego na STM32F4.
+ *
+ * LS OFF: CCxE=0, CCxNE=0 → oba wyjścia idle = LOW (OISx=OISxN=0)
  * ──────────────────────────────────────────────────────── */
 void pwm_ls_enable(phase_t phase, bool enable)
 {
-    uint16_t pin = 0;
+    uint32_t cce_mask  = 0;
+    uint32_t ccne_mask = 0;
+
     switch (phase) {
-    case PHASE_A: pin = (1UL << PWM_PIN_AL); break;
-    case PHASE_B: pin = (1UL << PWM_PIN_BL); break;
-    case PHASE_C: pin = (1UL << PWM_PIN_CL); break;
-    default: return;
+    case PHASE_A:
+        cce_mask  = TIM_CCER_CC1E;
+        ccne_mask = TIM_CCER_CC1NE;
+        if (enable) TIM1->CCR1 = 0;    /* 0% duty → OC1=LOW, OC1N=HIGH */
+        break;
+    case PHASE_B:
+        cce_mask  = TIM_CCER_CC2E;
+        ccne_mask = TIM_CCER_CC2NE;
+        if (enable) TIM1->CCR2 = 0;
+        break;
+    case PHASE_C:
+        cce_mask  = TIM_CCER_CC3E;
+        ccne_mask = TIM_CCER_CC3NE;
+        if (enable) TIM1->CCR3 = 0;
+        break;
+    default:
+        return;
     }
 
     if (enable) {
-        PWM_PORT_LOW->BSRR = pin;           /* set → ON */
+        /* Włącz oba wyjścia: główne (LOW) + komplementarne (HIGH).
+         * Kolejność: najpierw CCR=0, potem oba enable.
+         * Dead-time sprzętowy chroni przed shoot-through. */
+        TIM1->CCER |= (cce_mask | ccne_mask);
     } else {
-        PWM_PORT_LOW->BSRR = (pin << 16);   /* reset → OFF */
+        TIM1->CCER &= ~(cce_mask | ccne_mask);
     }
 }
 
@@ -197,12 +250,11 @@ void pwm_all_off(void)
 {
     TIM1->BDTR &= ~TIM_BDTR_MOE;            /* MOE = 0 */
 
-    TIM1->CCER &= ~(TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E);
+    /* Wyłącz wszystkie kanały HS i LS */
+    TIM1->CCER &= ~(TIM_CCER_CC1E  | TIM_CCER_CC2E  | TIM_CCER_CC3E
+                  | TIM_CCER_CC1NE | TIM_CCER_CC2NE | TIM_CCER_CC3NE);
 
-    PWM_PORT_LOW->BSRR = ((1UL << PWM_PIN_AL) << 16)
-                       | ((1UL << PWM_PIN_BL) << 16)
-                       | ((1UL << PWM_PIN_CL) << 16);
-
+    /* Wyzeruj wszystkie CCR (0% duty) */
     TIM1->CCR1 = 0;
     TIM1->CCR2 = 0;
     TIM1->CCR3 = 0;
