@@ -124,25 +124,38 @@ bool block_commutate(void)
                                ? &step_table_[block_step_prev_]
                                : NULL;
 
-    /* ── Sekwencja przełączania z dead-time ──────────── */
+    /* ── Sekwencja przełączania ──────────────────────────
+     * KLUCZOWE: przełączaj TYLKO fazy, które faktycznie się zmieniają.
+     * Przy każdej komutacji 6-step jedna faza pozostaje tą samą stroną
+     * (np. HS stały, zmienia się tylko LS — i odwrotnie). Tej fazy NIE
+     * wolno wyłączać i od razu ponownie załączać: przenosi ona prąd
+     * silnika, więc jej chwilowe wyłączenie wymusza przewodzenie diody
+     * body przeciwnego FET-a, a ponowne załączenie daje twarde
+     * odzyskiwanie tej diody (reverse recovery) = impuls prądowy typu
+     * shoot-through na TEJ SAMEJ nodze. Impuls rośnie z wypełnieniem
+     * i prędkością komutacji → niszczy FET-y bez ich nagrzewania. */
 
-    /* 1. Wyłącz LS poprzedniego kroku */
-    if (prev) {
-        pwm_ls_enable(prev->ls_phase, false);
-    }
-
-    /* 2. Wyłącz HS poprzedniego kroku */
-    if (prev) {
+    /* 1. Wyłącz stary HS tylko jeśli nowy HS jest na innej fazie */
+    if (prev && prev->hs_phase != step->hs_phase) {
         pwm_set_duty(prev->hs_phase, 0.0f);
         pwm_hs_enable(prev->hs_phase, false);
     }
 
-    /* 3. Ustaw duty dla nowego HS i włącz */
-    pwm_set_duty(step->hs_phase, block_duty_);
-    pwm_hs_enable(step->hs_phase, true);
+    /* 2. Wyłącz stary LS tylko jeśli nowy LS jest na innej fazie */
+    if (prev && prev->ls_phase != step->ls_phase) {
+        pwm_ls_enable(prev->ls_phase, false);
+    }
 
-    /* 4. Włącz LS dla nowego kroku */
-    pwm_ls_enable(step->ls_phase, true);
+    /* 3. Nowy HS: zawsze zaktualizuj wypełnienie; załącz tylko przy zmianie fazy */
+    pwm_set_duty(step->hs_phase, block_duty_);
+    if (!prev || prev->hs_phase != step->hs_phase) {
+        pwm_hs_enable(step->hs_phase, true);
+    }
+
+    /* 4. Nowy LS: załącz tylko przy zmianie fazy */
+    if (!prev || prev->ls_phase != step->ls_phase) {
+        pwm_ls_enable(step->ls_phase, true);
+    }
 
     return true;
 }

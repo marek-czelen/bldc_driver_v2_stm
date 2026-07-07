@@ -10,7 +10,7 @@
  *   - LS OFF → CCxNE=0, OISxN=0 → idle state = LOW
  *
  * Konfiguracja: 20 kHz, edge-aligned, active-high,
- *               dead-time 500 ns na wyjściach komplementarnych
+ *               dead-time 1 µs na wyjściach komplementarnych
  */
 
 #include <stm32f4xx.h>
@@ -102,8 +102,21 @@ void pwm_init(void)
     TIM1->CCER   = 0;                   /* CC1E/CC2E/CC3E = 0, CC1NE/CC2NE/CC3NE = 0 */
 
     /* ── TIM1_BDTR: dead-time + BREAK (BKIN active-low) ─ */
-    /* BKP=0 => break aktywny stanem niskim na BKIN */
-    TIM1->BDTR   = PWM_DTG_VAL          /* dead-time */
+    /* BKP=0 => break aktywny stanem niskim na BKIN.
+     *
+     * OSSR=1 / OSSI=1 — KRYTYCZNE dla driverów EG2113 (bez własnego
+     * dead-time / interlocku, jak IR2113):
+     *   Bez tych bitów wyłączone wyjście komplementarne (CCxNE=0 na
+     *   fazie sterowanej tylko po HS) oraz WSZYSTKIE wyjścia po BREAK
+     *   (MOE=0) przechodzą w Hi-Z. Wtedy wejścia HIN/LIN drivera
+     *   "pływają" i szybkie dV/dt węzła fazowego może przypadkowo
+     *   załączyć przeciwny FET → shoot-through.
+     *   OSSR/OSSI=1 wymuszają AKTYWNE trzymanie tych wyjść w stanie
+     *   idle (LOW przez OISx/OISxN=0), więc nieaktywny FET jest pewnie
+     *   wyłączony, a stan po overcurrent (MOE=0) jest twardo bezpieczny. */
+    TIM1->BDTR   = PWM_DTG_VAL          /* dead-time = 1 µs (DTG=96) */
+                 | TIM_BDTR_OSSR        /* run:  wyłączone wyj. = aktywnie LOW (nie Hi-Z) */
+                 | TIM_BDTR_OSSI        /* idle: MOE=0 → wyjścia aktywnie LOW (nie Hi-Z) */
                  | TIM_BDTR_BKE         /* BREAK input enable */
                  | TIM_BDTR_MOE;        /* main output enable */
 

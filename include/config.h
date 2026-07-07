@@ -14,11 +14,11 @@
 // ── PWM (TIM1) ─────────────────────────────────────────────
 #define PWM_FREQ_HZ             20000UL          // 20 kHz
 #define PWM_ARR                 (SYSTEM_CLOCK_HZ / PWM_FREQ_HZ - 1)  // 4799
-#define PWM_DEADTIME_NS         500             // dead-time 500 ns
-// TIM1_BDTR DTG dla 500 ns @ 96 MHz (10.4 ns/tick):
-// DTG[7:5]=0 → t_dts = 10.4 ns; deadtime = DTG[7:0] * t_dts
-// 500 / 10.4 ≈ 48 → DTG = 48 (0x30)
-#define PWM_DTG_VAL             48
+#define PWM_DEADTIME_NS         1000            // dead-time 1 µs
+// TIM1_BDTR DTG @ 96 MHz (CKD=0 → t_dtg = 1/96 MHz ≈ 10.417 ns/tick):
+// Zakres liniowy (DTG[7]=0): deadtime = DTG[7:0] * t_dtg, DTG = 0..127 (maks. ≈ 1.32 µs)
+// DTG = deadtime_ns * f_CK[MHz] / 1000 = 1000 * 96 / 1000 = 96 (0x60)
+#define PWM_DTG_VAL             ((PWM_DEADTIME_NS * (SYSTEM_CLOCK_HZ / 1000000UL)) / 1000UL)
 
 // ── Piny PWM (faza A / B / C) ─────────────────────────────
 // High-side: PA8, PA9, PA10 — TIM1_CH1, CH2, CH3 (PWM)
@@ -81,7 +81,7 @@
 #define LED_BLINK_MS            500
 
 // ── Limity testowe (zmień po zweryfikowaniu działania) ────
- #define PWM_MAX_DUTY         0.20f           // maks. 20% na pierwszy test
-//#define PWM_MAX_DUTY            1.00f           // pełny zakres
+ //#define PWM_MAX_DUTY         0.20f           // maks. 20% na pierwszy test
+#define PWM_MAX_DUTY            1.00f           // pełny zakres
 
 #endif // CONFIG_H

@@ -21,6 +21,7 @@
 #include "adc.h"
 #include "gpio.h"
 #include "block.h"
+#include "sinus.h"
 #include "safety.h"
 #include "cli.h"
 
@@ -107,6 +108,7 @@ int main(void)
     pwm_init();         /* TIM1 — 6 wyjść */
     adc_init();         /* ADC1 — prąd, nap., temp. */
     block_init();       /* Tryb BLOCK */
+    sinus_init();       /* Tryb SINUS */
     safety_init();      /* Monitor bezpieczeństwa */
     cli_init();         /* UART CLI (PA2/PA3, 115200) */
 
@@ -203,6 +205,30 @@ int main(void)
                     break;
 
                 case CTRL_MODE_SINUS:
+                    if (g_cli_control_active) {
+                        if (g_driver_state != STATE_RUN) {
+                            sinus_start();
+                            g_driver_state = STATE_RUN;
+                        }
+                        sinus_update();
+                    } else {
+                        /* Sterowanie manetką */
+                        if (g_throttle > 0.03f) {
+                            if (g_driver_state != STATE_RUN) {
+                                sinus_start();
+                                g_driver_state = STATE_RUN;
+                            }
+                            sinus_set_duty(g_throttle);
+                            sinus_update();
+                        } else {
+                            if (g_driver_state == STATE_RUN) {
+                                sinus_stop();
+                                g_driver_state = STATE_IDLE;
+                            }
+                        }
+                    }
+                    break;
+
                 case CTRL_MODE_FOC:
                     /* TODO: do implementacji w przyszłości */
                     if (g_driver_state == STATE_RUN) {
@@ -218,7 +244,10 @@ int main(void)
             } else {
                 /* Awaria — zatrzymaj jeśli nie zatrzymane */
                 if (g_driver_state == STATE_RUN) {
-                    block_stop();
+                    if (g_control_mode == CTRL_MODE_SINUS)
+                        sinus_stop();
+                    else
+                        block_stop();
                     g_driver_state = STATE_FAULT;
                 }
             }

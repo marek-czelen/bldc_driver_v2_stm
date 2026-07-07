@@ -16,6 +16,7 @@
 #include "main.h"
 #include "config.h"
 #include "block.h"
+#include "sinus.h"
 #include "safety.h"
 #include "adc.h"
 #include "gpio.h"
@@ -305,7 +306,10 @@ static void cmd_start(int argc, char *argv[])
     g_bus_voltage = vbat;
     g_cli_control_active = true;
     g_driver_state = STATE_RUN;
-    block_start();
+    if (g_control_mode == CTRL_MODE_SINUS)
+        sinus_start();
+    else
+        block_start();
     cli_println("Silnik uruchomiony.");
 }
 
@@ -318,7 +322,10 @@ static void cmd_stop(int argc, char *argv[])
         return;
     }
     g_cli_control_active = false;
-    block_stop();
+    if (g_control_mode == CTRL_MODE_SINUS)
+        sinus_stop();
+    else
+        block_stop();
     g_driver_state = STATE_IDLE;
     cli_println("Silnik zatrzymany.");
 }
@@ -327,8 +334,10 @@ static void cmd_duty(int argc, char *argv[])
 {
     if (argc < 2) {
         cli_println("Uzycie: duty <0-100>");
+        float cur = (g_control_mode == CTRL_MODE_SINUS)
+                  ? sinus_get_duty() : block_get_duty();
         char buf[32];
-        snprintf(buf, sizeof(buf), "Aktualne: %.1f %%", (double)(block_get_duty() * 100.0f));
+        snprintf(buf, sizeof(buf), "Aktualne: %.1f %%", (double)(cur * 100.0f));
         cli_println(buf);
         return;
     }
@@ -338,7 +347,10 @@ static void cmd_duty(int argc, char *argv[])
     if (pct > max_pct) pct = max_pct;
 
     float duty = pct / 100.0f;
-    block_set_duty(duty);
+    if (g_control_mode == CTRL_MODE_SINUS)
+        sinus_set_duty(duty);
+    else
+        block_set_duty(duty);
 
     char buf[32];
     snprintf(buf, sizeof(buf), "Duty ustawione na %.1f %%", (double)pct);
@@ -378,8 +390,12 @@ static void cmd_mode(int argc, char *argv[])
         g_control_mode = CTRL_MODE_BLOCK;
         cli_println("Tryb: BLOCK");
     } else if (strcmp(argv[1], "sinus") == 0) {
+        if (g_driver_state == STATE_RUN) {
+            block_stop();
+            g_driver_state = STATE_IDLE;
+        }
         g_control_mode = CTRL_MODE_SINUS;
-        cli_println("Tryb: SINUS (niezaimplementowany)");
+        cli_println("Tryb: SINUS");
     } else if (strcmp(argv[1], "foc") == 0) {
         g_control_mode = CTRL_MODE_FOC;
         cli_println("Tryb: FOC (niezaimplementowany)");
